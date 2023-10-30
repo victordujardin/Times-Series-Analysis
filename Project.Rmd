@@ -1,0 +1,552 @@
+---
+output:
+   pdf_document:
+     toc: true
+     toc_depth: 4
+fig_num: true
+fig_caption: true
+header-includes:
+  \usepackage{float}
+---
+
+\newpage
+
+```{r setup, include=FALSE, echo = F}
+knitr::opts_chunk$set(echo = F, comment = NA, warning = F, fig.width = 4,    fig.height= 2, fig.align="center", fig.show = "hold", fig.pos = "H")
+```
+
+## 1) Introduction
+
+In this project, we aim to analyze the daily stock returns of Dell Computer Corporation over a five-year period, spanning from October 1993 to October 1998. Our analysis begins with an initial presentation of the data and a thorough graphical examination. We then apply suitable transformations to the data and utilize the Autocorrelation Function (ACF) and Partial Autocorrelation Function (PACF) to extract valuable insights. By fitting multiple models to the data and selecting a parsimonious model, we establish a solid foundation for our analysis. The report culminates in forecasting future observations, offering critical information for financial analysts and investors.
+
+## 2) Data exploration
+
+The data for this project consists of the daily stock returns of Dell Computer Corporation from October 1993 to October 1998. As a reminder, Stock Return is the percentage rate of return calculated over a given period. It is computed using the formula: $$R_t = \frac{P_{t} - P_{t-1}} {P_{t-1}} $$ where $P_t$ represents the price of a stock at time t.
+
+```{r, message = F, warning=F, echo = F}
+library(fGarch)
+library(ggplot2)
+library(tseries)
+library(tsutils)
+library(patchwork)
+library(forecast)
+library(rugarch)
+library(zoo)
+library(e1071)
+library(FinTS)
+```
+
+```{r, message = F, warning=F}
+setwd("~/LSTAT2170 - Time Series")
+set.seed(1234)
+dell <- data.frame(read.table("dell.txt", header = FALSE))
+dell <- dell / 100
+dell <- ts(dell)
+
+```
+
+### 2.1) Plotting the data
+
+To begin the data exploration, we will visualize the time series by plotting the daily stock returns. The plot will provide a visual representation of the data and allow us to gain a preliminary understanding of the behavior of the time series
+
+```{r, message = F, fig.width = 6,    fig.height= 3, fig.cap="Plot of the data"}
+plot1 <- ggplot(data = data.frame(dell), aes(x = 1:1261, y = V1)) +
+  geom_line() +
+  labs(x = "Date", y = "Stock Returns", title = "Daily Stock Returns of Dell Computer Corporation")+
+  ggplot2::theme_bw()
+plot1
+```
+
+```{r, message = F, fig.width = 6,    fig.height= 3, fig.cap="Histogram of the data"}
+plot2 <- ggplot(data = data.frame(dell), mapping = aes(x = V1)) + labs(title = "Histogram of Daily Stock Returns of Dell") + 
+  geom_histogram()+
+  ggplot2::theme_bw()
+plot2
+```
+
+Based on the graphical analysis, we can draw several conclusions. Firstly, the data appears to be normally distributed. Secondly, the time series exhibits heteroscedasticity, and a GARCH model might be a suitable fit. There is no apparent trend or seasonality in the data, and it appears to be stationary. It is worth noting that a higher variance is observed around the 600th observation.
+
+### 2.2) Normality
+
+In time series analysis, checking for normality is an essential step in understanding the behavior of the data.
+
+```{r, message=F, fig.width = 6,    fig.height= 3, fig.cap="QQplot of the data"}
+ggplot2::ggplot(data = dell, aes(sample = dell)) +
+  stat_qq() + 
+  stat_qq_line() +
+  ggplot2::labs(title = "QQ plot for Dell time series data",
+           x = "Theoretical quantiles",
+           y = "Sample quantiles") +
+  ggplot2::theme_bw()
+
+```
+
+```{r}
+jarque.bera.test(dell)
+```
+
+The figure 3 reveals that the data is likely non-Gaussian, as the first and last quantiles do not align with the reference line. Additionally, the Jarque-Bera test rejects the null hypothesis of normality, indicating that the normality assumption is not satisfied.
+
+### 2.3) Stationnarity
+
+Graphically, there is no trend that appears but, just to be sure, we can still test the stationnarity of the data. The null hypothesis of the Augmented Dickey-Fuller test is that the time series has a unit root.
+
+```{r, warning=F}
+adf.test(dell)
+
+```
+
+The dickey-Fuller states that the data is stationary.
+
+## 3) Transformation
+
+In financial time series analysis, log-returns offer advantages over raw stock prices or simple returns. Defined as:
+
+$$log(X_{t}) - log(X_{t-1})$$ where $X_{t}$ is the stock price at time $t$, log-returns provide:
+
+-   Additivity and Symmetry: Easier aggregation of returns across time and a balanced view of gains and losses.
+-   Stationarity: Log-returns tend to be more stationary, a key assumption for time series models.
+
+Even with log-returns, applying the `diff` function may be necessary to differentiate and further smooth the data. We will now analyze the differentiated log-returns.
+
+```{r, fig.width = 6,    fig.height= 3, fig.cap="differentiated log-returns", fig.show  = "hold"}
+logdell = diff(log(dell + 1))
+
+
+
+plot(logdell)
+
+```
+
+## 4) ACF and PACF
+
+```{r, fig.width = 6,    fig.height= 4, fig.cap="ACF and PACF", fig.show  = "hold"}
+par(mfrow = c(1, 2))
+acf(logdell) 
+pacf(logdell)
+```
+
+In the analysis of Figure 5, the autocorrelation function (ACF) and partial autocorrelation function (PACF) plots suggest that an MA(1) model could be suitable for the data. The ACF approaches 0 for time lags beyond 1, while the PACF gradually declines towards 0. The ACF plot, which measures the correlation between data points in a time series separated by a specific lag, indicates a negative correlation between consecutive observations. Conversely, the PACF plot accounts for the correlations of intervening observations and demonstrates that a random shock may still impact lags greater than 1, but its effect diminishes over time.
+
+## 5) Model fitting
+
+In this section, we will explore the most appropriate model for our dataset. As the time series displays heteroscedasticity, a GARCH model may be a fitting choice. However, the ACF and PACF plots indicate that an ARMA model could also be a suitable fit. We will first investigate fitting an ARMA model to gain valuable insights into the underlying processes that generate the data.
+
+### 5.1) ARMA
+
+Firstly, we will begin by fitting an ARMA model. Since there is no evident trend or seasonality in the data, thus we will not consider SARIMA models. ARMA models are commonly employed to model stationary time series that demonstrate correlation between successive observations. This is the case for our data, as observed during the data exploration stage.
+
+```{r}
+source('FonctionsSeriesChrono.R')
+Comp.Sarima(logdell, d = 0, saison = NA, D = 0, p.max = 3, q.max = 3, P.max = 0, Q.max = 0)
+
+```
+
+The model with the lowest AIC-AIC_min value, which is 0, is the $(2,0,1)\times(0,0,0)$ model, indicating a good fit to the data.
+
+In addition, based on the analysis of the ACF and PACF, we will also fit an MA(1) model to the data.
+
+```{r}
+arma1 = arima(logdell, order = c(0,0,1))
+arma2 = arima(logdell, order = c(2,0,1))
+
+
+AIC(arma1, arma2)  
+BIC(arma1, arma2)  
+```
+
+We can see that the ARMA(2,1) model has a lower AIC value and the MA(1) model has a lower BIC value. However, since the difference between the two criteria is not significant and the MA(2) model is more parsimonious, we will select the MA(1) model.
+
+#### 5.1.1) Significance of coefficients
+
+We will now proceed to test the statistical significance of the coefficients in our model.
+
+```{r}
+coef.p(arma1$coef, diag(arma1$var.coef))
+
+```
+
+Upon examining the output, it can be observed that the p-value of the first-order coefficient is close to zero, indicating its high significance. However, the p-value of the intercept is `r round(coef.p(arma1$coef, diag(arma1$var.coef))["intercept"],4)`, indicating that we cannot determine its significant deviation from zero.
+
+
+The values of the coefficients are the following
+
+```{r}
+arma1$coef
+
+```
+
+The MA(1) process is then:
+
+$$y_t = e_t -0.9999749 e_{t-1}$$
+
+where $y_t$ is the time series at time $t$, $e_t$ is the error term at time $t$.
+
+
+#### 5.1.2) Analysis of residuals
+
+
+```{r, fig.width = 6,    fig.height= 6, fig.align="center", fig.cap = "residual analysis"}
+tsdiag(arma1)
+```
+
+Based on the plot and the Ljung-Box test results presented below, we fail to show that there is a significant autocorrelation between the residuals.
+
+```{r, fig.width = 6,    fig.height= 4, fig.align="center", fig.cap="ACF and PACF of the residuals"}
+par(mfrow = c(1,2))
+acf(residuals(arma1))
+pacf(residuals(arma1))
+
+
+Box.test(residuals(arma1),type = "Ljung-Box")
+```
+
+However, there is clear evidence of autocorrelation in the squared residuals.
+
+```{r, fig.width = 6,    fig.height= 4, fig.cap="ACF and PACF of the squared residuals"}
+par(mfrow = c(1,2))
+acf(residuals(arma1)**2)
+pacf(residuals(arma1)**2)
+Box.test(residuals(arma1)**2,type = "Ljung-Box")
+
+```
+
+#### 5.1.3) Predicition error
+
+```{r, fig.width = 6,    fig.height= 3, fig.cap="prediction error"}
+arma1.pred <- OneAhead(logdell, order = c(0, 0, 1))
+
+plot(logdell)
+lines(ts(arma1.pred$tspred), col = "red", lty = 2)
+
+
+```
+
+```{r}
+arma1.pred$error
+```
+
+The prediction error of our model is `r round(arma1.pred$error, 4 )`.
+
+### 5.2) GARCH
+
+As anticipated, the following `ArchTest` function indicates the presence of conditional heteroscedasticity in the series.
+
+```{r}
+ArchTest(logdell)
+```
+
+We will now fit a GARCH model to account for the conditional heteroscedasticity in the series. Before fitting the model, let's plot the square of the data.
+
+```{r, fig.width = 6,    fig.height= 4, fig.cap="Plot of the squared returns"}
+plot.ts(logdell**2)
+```
+
+Based on the plot of the squared data, it is evident that the conditional variance is not constant and varies with time, indicating again that the time series is heteroscedastic.
+
+```{r, fig.width = 6,    fig.height= 4, , fig.cap="ACF and PACF"}
+par(mfrow= c(1,2))
+acf(logdell**2)
+pacf(logdell**2)
+```
+
+Given the ACF and PACF plots, it is inconclusive whether a pure AR or pure MA model would be suitable. To determine this, we can use the `Comp.Sarima` function.
+
+```{r}
+Comp.Sarima(logdell^2, d = 0, saison = NA, D = 0, p.max = 2, q.max = 2, P.max = 0, Q.max = 0)
+```
+
+The analysis suggests that the squared log-returns can be modeled by an ARMA (2,1) model, which can be approximated by a GARCH (2,1) model.
+
+```{r}
+garch(logdell, grad = "numerical", trace = F)
+
+```
+
+However, according to the `garch` function, a garch(1,1) model is suggested.
+
+```{r}
+
+fit = garchFit(data ~ garch(2, 1), data = logdell, trace = F)
+fit2  = garchFit(data ~ garch(1, 1), data = logdell, trace = F)
+
+paste("garch(2,1) loglikelihood : ",-fit@fit$value)
+paste("garch(1,1) loglikelihood : ",-fit2@fit$value)
+
+
+paste("garch(2,1) criteria :")
+fit@fit$ics 
+
+
+paste("garch(1,1) criteria :")
+fit2@fit$ics 
+
+
+```
+
+Based on the AIC, BIC, and likelihood values, the GARCH(1,1) model is slightly better than the GARCH(2,1) model and is also more parsimonious.
+
+#### 5.2.1) Significance of coefficients
+
+
+```{r}
+fit = fit2
+
+
+fit@fit$matcoef
+```
+
+All coefficients except for mu appear to be significant, as shown in the table above.
+
+The GARCH model equation for the conditional variance at time $t$ is:
+
+$$\sigma_t^2 = 0.0006007746 + 0.2601478239 \times \epsilon_{t-1}^2 + 0.4731466706 \times \sigma_{t-1}^2$$
+
+where $\epsilon_{t-1}^2$ is the squared residual at time $t-1$, and $\sigma_{t-1}^2$ is the conditional variance at time $t-1$.
+
+#### 5.2.2) Analysis of residuals
+
+```{r}
+capture.output(summary(fit))[39:48] 
+```
+
+The jarque-bera test and shapiro-wilk rejects the null hypothesis of normality of the residuals. The ljung-box test fails to reject the hypothesis of independance of the squared residuals up to lag 10.
+
+```{r, fig.width = 6,    fig.height= 3, fig.cap="sigma squared over time"}
+plot.ts(fit@sigma.t**2)
+```
+
+This plot shows the estimated variance over time obtained from our model.
+
+### 5.3) ARMA + GARCH
+
+Given that the Ljung-Box test suggests that there is still some remaining structure in the squared residuals, we can consider a combination of ARMA and GARCH models to capture this structure.
+
+We will fit an MA(1) + GARCH(1,1) model and compare its performance with the previously selected GARCH(1,1) model.
+
+```{r}
+fit2 <- garchFit(data ~ arma(0,1) + garch(1,1), data = logdell, trace = F)
+-fit2@fit$value
+fit2@fit$ics
+
+```
+
+We can observe an improvement in the likelihood, AIC, and BIC values compared to the GARCH(1,1) model. Hence, our final model will be the ARMA(0,2) + GARCH(1,1) model with the following coefficients.
+
+```{r}
+coef(fit2)
+```
+
+The final model is defined by:
+
+$$
+\begin{aligned}
+y_t &= 2.215165 \times 10^{-5} - 0.9843801 \epsilon_{t-1} + \epsilon_t \\
+\epsilon_t &\sim \mathcal{N}(0, h_t) \\
+h_t &= 5.117941 \times 10^{-5} + 0.06602835 \epsilon_{t-1}^2 + 0.889521 \times h_{t-1}
+\end{aligned}
+$$
+
+where $y_t$ is the differenciated log-return at time $t$, $\epsilon_t$ is the conditional error term at time $t$, and $h_t$ is the conditional variance of $\epsilon_t$. The parameters of the model are $\mu_t=2.215165 \times 10^{-5}$, $\theta=-0.9843801$, $\alpha_0=5.117941 \times 10^{-5}$, $\alpha_1=0.06602835$, and $\beta_1=0.889521$.
+
+We can find the original stock returns $x_t$ by applying the inverse transformation $x_t = exp(y_t + log(x_{t-1} + 1))-1$ which can be found recursively.
+
+## 6) Prediction
+
+Now that we have selected our model, we will make predictions for 10% of the dataset. We will compare the parametric prediction with a nonparametric prediction method (exponential smoothing) and analyze the prediction intervals for both methods.
+
+### 6.1) Parametric Prediction
+
+As we can see on the figure, the prediction intervals for the Time Series is given by the equations $\hat{X}_{t+h} - 1.96 \sqrt{MSE}$ for the lower boundary and $\hat{X}_{t+h} + 1.96 \sqrt{MSE}$ for the upper boundary. where $\hat{X}_{t+h}$ is $X_{T+h} = \mathbb{E}[X_{T+h} | X_1, \ldots, X_T]$ and the MSE is the mean squared error of the predictions.
+
+```{r, echo = F, fig.width = 6,    fig.height= 3.5, fig.cap="parametric prediction"}
+pred <- fGarch::predict(fit2, n.ahead = length(logdell)*0.1, plot = T, conf = 0.95, mse = "cond")
+
+
+```
+
+### 6.2) Nonparametric Prediction
+
+For the nonparametric prediction, we use the exponential smoothing method. The prediction formula for this method is as follows:
+
+$\hat{X}_{T+1|T} = \sum_{k\le1} \delta\left(1-\delta\right)^{k-1} X_{T+1-k} = \delta X_T + \left(1-\delta\right) \hat{X}_{T|T-1}$
+
+The non-parametric forecasting do not make use of the chosen model.
+
+```{r, echo = F,  message=F, warning = F, fig.width = 6,    fig.height= 3.5, fig.cap="Nonparametric prediction"}
+mod.HW <- HoltWinters(log(logdell+ 1), gamma =F, beta = F)
+
+
+pred.HW <- predict(mod.HW,n.ahead = length(logdell)*0.1, prediction.interval = T, level = 0.95)
+ts.tot <- ts(c(logdell, exp(pred.HW[,"fit"])-1))
+
+
+
+plot(ts.tot, type = "l", col ="grey", main = "Prediction Holt-Winters")
+lines(exp(pred.HW[,"upr"])-1, lty = 2, col = "red")
+lines(exp(pred.HW[,"lwr"])-1, lty = 2, col = "red")
+
+
+
+```
+### 6.3) Comparison and Discussion
+We can observe that both parametric and nonparametric prediction methods produce almost similar prediction intervals, centered around near-zero predictions. However, there are some differences between the two methods.
+
+For the parametric prediction using the GARCH model, the first prediction has a value of -6.45 x 10\^-2, while all subsequent predictions have a value of 2.22 x 10\^-5. The confidence interval length begins at 0.1306 for the first prediction and increases to 0.1833 for the second prediction, gradually expanding over time.
+
+In contrast, the exponential smoothing prediction consistently has a value of -2.49 x 10\^-4. The confidence intervals for this method have an initial length of 0.1873 and increase over time at a slightly slower rate compared to the parametric prediction.
+
+Overall, the parametric method constructs slightly smaller confidence intervals than the exponential smoothing method, but the lengths remain consistently around 0.18 for all predictions.
+
+## 7) Conclusion
+
+In conclusion, this project involved a comprehensive analysis of the daily returns of Dell between October 1993 and October 1998. The study began with a data exploration phase, which provided insights into the data's general structure and revealed its stationary and non-normal distribution characteristics. The Jarque-Bera test, augmented Dickey-Fuller test, and QQ-plot were employed to validate these findings.
+
+To improve stationarity and ensure additivity, we transformed the data into integrated log-returns. Subsequently, we examined the ACF and PACF plots, which indicated an MA(1) model as the most suitable. Although the ARMA(2,1) model presented a better AIC, the MA(1) model was more parsimonious and had a superior BIC.
+
+An analysis of the MA(1) model's residuals revealed a remaining structure in the squared residuals. Given the data's heteroscedastic nature, as confirmed by the ARCH-LM test, we proceeded to fit a GARCH model to account for the variance structure. After comparing various models, we retained the GARCH(1,1) model and assessed its residuals. The Ljung-Box test indicated a residual structure up to lag 10.
+
+In response to the residual structures detected in both models, we fitted an ARMA+GARCH model that demonstrated improved AIC, BIC, and likelihood compared to the standalone GARCH(1,1) model. The project's final stage involved predicting approximately 10% of the dataset using both parametric and non-parametric methods.
+
+The predictions generated by both methods had almost similar shapes and values but increase over time at slightly different rates. As time progressed, the confidence intervals increased in size and eventually reached an equilibrium. Overall, this project provided valuable insights into Dell's daily returns and allowed for effective modeling and forecasting using time series techniques.
+
+## 8) Appendix
+
+```{r, eval = F, echo = T}
+library(fGarch)
+library(ggplot2)
+library(tseries)
+library(tsutils)
+library(patchwork)
+library(forecast)
+library(rugarch)
+library(zoo)
+library(e1071)
+library(FinTS)
+setwd("~/LSTAT2170 - Time Series")
+set.seed(1234)
+dell <- data.frame(read.table("dell.txt", header = FALSE))
+dell <- dell / 100
+dell <- ts(dell)
+# Data exploration
+# Plotting the data
+plot1 <- ggplot(data = data.frame(dell), aes(x = 1:1261, y = V1)) +
+  geom_line() +
+  labs(x = "Date", y = "Stock Returns", title = "Daily Stock Returns of Dell Computer Corporation") +
+  ggplot2::theme_bw()
+plot1
+
+plot2 <- ggplot(data = data.frame(dell), mapping = aes(x = V1)) +
+  labs(title = "Histogram of Daily Stock Returns of Dell") +
+  geom_histogram() +
+  ggplot2::theme_bw()
+plot2
+# Normality
+ggplot2::ggplot(data = dell, aes(sample = dell)) +
+  stat_qq() +
+  stat_qq_line() +
+  ggplot2::labs(
+    title = "QQ plot for Dell time series data",
+    x = "Theoretical quantiles",
+    y = "Sample quantiles"
+  ) +
+  ggplot2::theme_bw()
+
+jarque.bera.test(dell)
+# Stationnarity
+adf.test(dell)
+# Transformation
+logdell <- diff(log(dell + 1))
+
+plot(logdell)
+# ACF and PACF
+par(mfrow = c(1, 2))
+acf(logdell)
+pacf(logdell)
+# Model fitting
+# ARMA
+source("FonctionsSeriesChrono.R")
+Comp.Sarima(logdell, d = 0, saison = NA, D = 0, p.max = 3, q.max = 3, P.max = 0, Q.max = 0)
+
+arma1 <- arima(logdell, order = c(0, 0, 1))
+arma2 <- arima(logdell, order = c(2, 0, 1))
+
+
+AIC(arma1, arma2)
+BIC(arma1, arma2)
+# Significance of coefficients
+coef.p(arma1$coef, diag(arma1$var.coef))
+# Analysis of residuals
+tsdiag(arma1)
+
+par(mfrow = c(1, 2))
+acf(residuals(arma1))
+pacf(residuals(arma1))
+Box.test(residuals(arma1), type = "Ljung-Box")
+
+par(mfrow = c(1, 2))
+acf(residuals(arma1)**2)
+pacf(residuals(arma1)**2)
+Box.test(residuals(arma1)**2, type = "Ljung-Box")
+# Predicition error
+arma1.pred <- OneAhead(logdell, order = c(0, 0, 1))
+
+plot(logdell)
+lines(ts(arma1.pred$tspred), col = "red", lty = 2)
+
+arma1.pred$error
+# GARCH
+ArchTest(logdell)
+
+par(mfrow = c(1, 2))
+acf(logdell**2)
+pacf(logdell**2)
+
+Comp.Sarima(logdell^2, d = 0, saison = NA, D = 0, p.max = 2, q.max = 2, P.max = 0, Q.max = 0)
+
+garch(logdell, grad = "numerical", trace = F)
+
+fit <- garchFit(data ~ garch(2, 1), data = logdell, trace = F)
+fit2 <- garchFit(data ~ garch(1, 1), data = logdell, trace = F)
+
+paste("garch(2,1) loglikelihood : ", -fit@fit$value)
+paste("garch(1,1) loglikelihood : ", -fit2@fit$value)
+
+
+paste("garch(2,1) criteria :")
+fit@fit$ics
+
+
+paste("garch(1,1) criteria :")
+fit2@fit$ics
+
+fit <- fit2
+
+
+fit@fit$matcoef
+# Analysis of residuals
+capture.output(summary(fit))[39:48]
+
+plot.ts(fit@sigma.t**2)
+# ARMA + GARCH
+fit2 <- garchFit(data ~ arma(0, 1) + garch(1, 1), data = logdell, trace = F)
+-fit2@fit$value
+fit2@fit$ics
+
+coef(fit2)
+# Prediction
+pred <- fGarch::predict(fit2, n.ahead = length(logdell) * 0.1, plot = T, conf = 0.95, mse = "cond")
+
+mod.HW <- HoltWinters(log(logdell + 1), gamma = F, beta = F)
+
+
+pred.HW <- predict(mod.HW, n.ahead = length(logdell) * 0.1, prediction.interval = T, level = 0.95)
+ts.tot <- ts(c(logdell, exp(pred.HW[, "fit"]) - 1))
+
+
+
+plot(ts.tot, type = "l", col = "grey", main = "Prediction Holt-Winters")
+lines(exp(pred.HW[, "upr"]) - 1, lty = 2, col = "red")
+lines(exp(pred.HW[, "lwr"]) - 1, lty = 2, col = "red")
+
+```
