@@ -1,2 +1,2 @@
 # Times-Series-Analysis
-Time Series Project
+This project aims to analyse the stock returns of Dell incorportation using differents time series models.
