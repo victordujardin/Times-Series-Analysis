@@ -78,4 +78,4 @@ The analysis report includes:
 
 ## Contact
 
-For any questions or further information, please contact Victor Dujardin at [victor.dujardin@student.uclouvain.be](mailto:victor.dujardin@student.uclouvain.be).
+For any questions or further information, please contact Victor Dujardin at [victor.dujardin@student.uclouvain.be](mailto:victor.dujardin@uclouvain.be).
